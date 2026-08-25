@@ -336,7 +336,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return;
       }
       await _loadMappings();
-      await _playCurrentButton(_selectedId);
     } on PlatformException catch (error) {
       if (mounted) {
         setState(() {
@@ -443,10 +442,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           onSelect: (button) {
                             if (!_recording) {
                               setState(() => _selectedId = button.id);
-                              if (_mappings[button.id]?.hasAudio == true) {
-                                _playCurrentButton(button.id);
-                              } else if (_playingId != null) {
-                                _stopPlayback();
+                              if (_playingId != null) {
+                                unawaited(_stopPlayback());
                               }
                             }
                           },
