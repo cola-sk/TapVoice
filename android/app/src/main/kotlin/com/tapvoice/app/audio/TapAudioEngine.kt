@@ -43,8 +43,8 @@ object TapAudioEngine {
             return
         }
         audioPathsByButton[buttonId] = path
-        if (keyCode != 0) {
-            buttonByKey[keyCode] = buttonId
+        MappingStore.keyCodesFor(buttonId, keyCode).forEach { code ->
+            buttonByKey[code] = buttonId
         }
     }
 
@@ -54,10 +54,15 @@ object TapAudioEngine {
     }
 
     fun playByKeyCode(keyCode: Int): Boolean {
+        return playByKeyCodeWithButton(keyCode) != null
+    }
+
+    /** Returns the resolved slot only when its audio actually started. */
+    fun playByKeyCodeWithButton(keyCode: Int): String? {
         val button = buttonByKey[keyCode]
             ?: MappingStore(context).findByKey(keyCode)?.buttonId
-            ?: return false
-        return playByButton(button)
+            ?: return null
+        return button.takeIf(::playByButton)
     }
 
     fun playByButton(buttonId: String): Boolean {
@@ -78,6 +83,9 @@ object TapAudioEngine {
             return 0
         }
 
+        // TapVoice is a soundboard: a newly triggered recording always takes
+        // priority over an unfinished one, rather than mixing both clips.
+        stopAll()
         val streamId = streamIdCounter.getAndIncrement()
         try {
             val player = MediaPlayer()

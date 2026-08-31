@@ -12,6 +12,9 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.provider.OpenableColumns
+import android.view.InputDevice
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.tapvoice.app.audio.TapAudioEngine
@@ -31,6 +34,76 @@ class MainActivity : FlutterActivity() {
     private lateinit var recorder: TapRecorder
     private var pendingUploadResult: MethodChannel.Result? = null
     private var pendingUploadButtonId: String? = null
+    private val interceptedKeyCodes = mutableSetOf<Int>()
+    private var activeDpadButtonId: String? = null
+    private var handledDpadMotion = false
+
+    /**
+     * Some Android builds route D-input gamepad keys to Flutter focus
+     * navigation before an AccessibilityService sees them.  When TapVoice is
+     * visible, consume a mapped key here so DPAD buttons do not move focus to
+     * the Play/Record controls instead of playing their audio.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val keyCode = event.keyCode
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val buttonId = TapAudioEngine.playByKeyCodeWithButton(keyCode)
+            if (buttonId != null) {
+                interceptedKeyCodes += keyCode
+                TapEventBus.keyPressed(keyCode, buttonId)
+                return true
+            }
+        } else if (event.action == KeyEvent.ACTION_UP && keyCode in interceptedKeyCodes) {
+            interceptedKeyCodes -= keyCode
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * In D-input mode the Micro reports its D-pad as HAT_X/HAT_Y joystick
+     * motion rather than DPAD key events.  Handle the press edge once and
+     * consume the motion so Flutter's focus traversal cannot move to the
+     * sidebar controls.
+     */
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.action != MotionEvent.ACTION_MOVE ||
+            !event.isFromSource(InputDevice.SOURCE_JOYSTICK)
+        ) {
+            return super.dispatchGenericMotionEvent(event)
+        }
+
+        val horizontal = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+        val vertical = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        val buttonId = when {
+            vertical <= -0.5f -> "btn_dpad_up"
+            vertical >= 0.5f -> "btn_dpad_down"
+            horizontal <= -0.5f -> "btn_dpad_left"
+            horizontal >= 0.5f -> "btn_dpad_right"
+            else -> null
+        }
+
+        if (buttonId == activeDpadButtonId) {
+            return if (handledDpadMotion) true else super.dispatchGenericMotionEvent(event)
+        }
+
+        if (buttonId == null) {
+            val wasHandled = handledDpadMotion
+            activeDpadButtonId = null
+            handledDpadMotion = false
+            return if (wasHandled) true else super.dispatchGenericMotionEvent(event)
+        }
+
+        activeDpadButtonId = buttonId
+        handledDpadMotion = false
+        if (TapAudioEngine.playByButton(buttonId)) {
+            handledDpadMotion = true
+            TapEventBus.keyPressed(MappingStore.DEFAULT_KEYS[buttonId] ?: 0, buttonId)
+            return true
+        }
+
+        return super.dispatchGenericMotionEvent(event)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

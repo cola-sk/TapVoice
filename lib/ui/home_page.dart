@@ -22,15 +22,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   StreamSubscription<Map<Object?, Object?>>? _events;
   Timer? _recordingTimer;
   Timer? _playbackTimer;
+  Timer? _nativePlaybackFeedbackTimer;
 
   String? _selectedId;
   String? _triggeredId;
   String? _playingId;
+  String? _nativePlaybackFeedbackId;
   int? _playbackStreamId;
   int _playingDurationMs = 0;
   Duration _playbackElapsed = Duration.zero;
   DateTime? _playbackStartedAt;
   double _playingProgress = 0.0;
+  double _nativePlaybackFeedbackProgress = 0.0;
   bool _playingPaused = false;
   bool _recording = false;
   bool _paused = false;
@@ -64,6 +67,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _events?.cancel();
     _recordingTimer?.cancel();
     _playbackTimer?.cancel();
+    _nativePlaybackFeedbackTimer?.cancel();
     final streamId = _playbackStreamId;
     if (streamId != null) {
       unawaited(_bridge.stopPlayback(streamId));
@@ -106,21 +110,67 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _handleNativeEvent(Map<Object?, Object?> event) {
     if (event['type'] != 'keyPressed') return;
     final keyCode = (event['keyCode'] as num).toInt();
-    final matches = gamepadButtons.where(
-      (item) => (_mappings[item.id]?.keyCode ?? item.keyCode) == keyCode,
-    );
+    final buttonId = event['buttonId'] as String?;
+    final matches = buttonId == null
+        ? gamepadButtons.where((item) {
+            final mappedKeyCode = _mappings[item.id]?.keyCode ?? item.keyCode;
+            return mappedKeyCode == keyCode ||
+                item.keyCode == keyCode ||
+                item.alternateKeyCodes.contains(keyCode);
+          })
+        : gamepadButtons.where((item) => item.id == buttonId);
     if (matches.isEmpty || !mounted) return;
     final button = matches.first;
     setState(() {
       _selectedId = button.id;
       _triggeredId = button.id;
     });
+    _startNativePlaybackFeedback(button.id);
     HapticFeedback.lightImpact();
     Future<void>.delayed(const Duration(milliseconds: 200), () {
       if (mounted && _triggeredId == button.id) {
         setState(() => _triggeredId = null);
       }
     });
+  }
+
+  /// Accessibility playback starts in the Android service, so Flutter does
+  /// not receive a MediaPlayer stream ID. Keep a UI-only countdown in sync
+  /// with the saved recording duration without starting the audio twice.
+  void _startNativePlaybackFeedback(String buttonId) {
+    _nativePlaybackFeedbackTimer?.cancel();
+    final mapping = _mappings[buttonId];
+    final durationMs = mapping != null && mapping.durationMs > 0
+        ? mapping.durationMs
+        : 1200;
+    final startedAt = DateTime.now();
+    if (mounted) {
+      setState(() {
+        _nativePlaybackFeedbackId = buttonId;
+        _nativePlaybackFeedbackProgress = 0.0;
+      });
+    }
+    _nativePlaybackFeedbackTimer = Timer.periodic(
+      const Duration(milliseconds: 30),
+      (timer) {
+        if (!mounted || _nativePlaybackFeedbackId != buttonId) {
+          timer.cancel();
+          return;
+        }
+        final progress =
+            (DateTime.now().difference(startedAt).inMilliseconds / durationMs)
+                .clamp(0.0, 1.0);
+        if (progress >= 1.0) {
+          timer.cancel();
+          setState(() {
+            _nativePlaybackFeedbackId = null;
+            _nativePlaybackFeedbackProgress = 0.0;
+          });
+        } else {
+          setState(() => _nativePlaybackFeedbackProgress = progress);
+        }
+      },
+    );
   }
 
   Future<void> _playCurrentButton([String? buttonId]) async {
@@ -402,10 +452,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _enableBackground() async {
-    await _bridge.requestNotificationPermission();
-    await _bridge.startForegroundService();
-    await _bridge.openAccessibilitySettings();
+  Future<void> _openBackgroundSettings() async {
+    try {
+      if (!_accessibilityEnabled) {
+        await _bridge.requestNotificationPermission();
+        await _bridge.startForegroundService();
+      }
+      await _bridge.openAccessibilitySettings();
+    } on PlatformException catch (error) {
+      _message('无法打开后台监听设置：${error.message ?? error.code}');
+    }
   }
 
   void _message(String value) {
@@ -434,8 +490,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           selectedId: _selectedId,
                           boundIds: _boundIds,
                           triggeredId: _triggeredId,
-                          playingId: _playingId,
-                          playingProgress: _playingProgress,
+                          playingId: _nativePlaybackFeedbackId ?? _playingId,
+                          playingProgress: _nativePlaybackFeedbackId != null
+                              ? _nativePlaybackFeedbackProgress
+                              : _playingProgress,
                           recording: _recording && !_paused,
                           recordingProgress: (_elapsed.inMilliseconds / 60000)
                               .clamp(0.0, 1.0),
@@ -474,19 +532,60 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               Positioned(
                 top: 18,
                 right: 22,
-                child: GestureDetector(
-                  onTap: _accessibilityEnabled
-                      ? _refreshAccessibility
-                      : _enableBackground,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: _accessibilityEnabled
-                          ? const Color(0xFFD0D0D0)
-                          : const Color(0xFFD9D7D7),
-                      shape: BoxShape.circle,
+                child: Tooltip(
+                  message: _accessibilityEnabled
+                      ? '后台监听已开启，点击打开无障碍设置'
+                      : '开启后台监听',
+                  child: Semantics(
+                    button: true,
+                    label: _accessibilityEnabled ? '已开启' : '去开启',
+                    child: GestureDetector(
+                      onTap: _openBackgroundSettings,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        height: 44,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: _accessibilityEnabled
+                              ? const Color(0xFFDDF4E1)
+                              : const Color(0xFFE7E5E5),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(
+                            color: _accessibilityEnabled
+                                ? const Color(0xFF42A85A)
+                                : const Color(0xFFB8B5B5),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              child: Icon(
+                                _accessibilityEnabled
+                                    ? Icons.check_circle
+                                    : Icons.accessibility_new,
+                                key: ValueKey(_accessibilityEnabled),
+                                size: 22,
+                                color: _accessibilityEnabled
+                                    ? const Color(0xFF25863D)
+                                    : const Color(0xFF6F6B6B),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _accessibilityEnabled ? '已开启' : '去开启',
+                              style: TextStyle(
+                                color: _accessibilityEnabled
+                                    ? const Color(0xFF25863D)
+                                    : const Color(0xFF5D5959),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),

@@ -120,7 +120,7 @@ class _ControllerHotspot extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (triggered)
+                  if (triggered && !playing)
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 160),
                       decoration: BoxDecoration(

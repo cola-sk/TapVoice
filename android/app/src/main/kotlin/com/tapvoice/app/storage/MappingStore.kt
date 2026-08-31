@@ -20,7 +20,15 @@ class MappingStore(context: Context) {
 
     fun all(): List<Map<String, Any?>> = read().map { it.toMap() }
 
-    fun findByKey(keyCode: Int) = read().firstOrNull { it.keyCode == keyCode && it.audioPath != null }
+    /**
+     * A Micro in keyboard (K) mode emits keyboard key codes, while the same
+     * physical button in controller mode emits BUTTON_* codes.  Keep both
+     * forms associated with the recording slot so stored recordings work in
+     * either mode.
+     */
+    fun findByKey(keyCode: Int) = read().firstOrNull {
+        it.audioPath != null && keyCode in keyCodesFor(it.buttonId, it.keyCode)
+    }
     fun findByButton(buttonId: String) = read().firstOrNull { it.buttonId == buttonId }
 
     fun save(buttonId: String, keyCode: Int, audioPath: String?): AudioMapping {
@@ -84,5 +92,42 @@ class MappingStore(context: Context) {
             "btn_minus" to 69, "btn_plus" to 81, "btn_star" to 17, "btn_home" to 3,
             "btn_l1" to 102, "btn_r1" to 103,
         )
+
+        /**
+         * Keyboard-mode aliases emitted by the 8BitDo Micro (2DC8:9021).
+         *
+         * These were verified from the device's Linux input events.  The
+         * previous W/S/A/D and I/J/K/M assumptions overlap other physical
+         * buttons on the real device (for example S is Home, not D-pad Down),
+         * which made the wrong recording play.
+         */
+        private val KEYBOARD_KEYS = mapOf(
+            "btn_dpad_up" to 31, "btn_dpad_down" to 32,
+            "btn_dpad_left" to 33, "btn_dpad_right" to 34,
+            "btn_x" to 36, "btn_y" to 37, "btn_a" to 35, "btn_b" to 38,
+            "btn_minus" to 42, "btn_plus" to 43,
+            // The Star key emits no Android input event in the tested K profile.
+            "btn_home" to 47,
+            "btn_l1" to 45, "btn_r1" to 44,
+        )
+
+        /** Extra key codes emitted by the Micro's D-input profile. */
+        private val D_INPUT_KEYS = mapOf(
+            "btn_minus" to 109, // KEYCODE_BUTTON_SELECT
+            "btn_plus" to 108, // KEYCODE_BUTTON_START
+            "btn_home" to 110, // KEYCODE_BUTTON_MODE
+        )
+
+        /**
+         * Includes a user-learned primary code, the standard controller code,
+         * and the standard keyboard-mode code.  Set removes duplicates.
+         */
+        fun keyCodesFor(buttonId: String, primaryKeyCode: Int): Set<Int> =
+            buildSet {
+                if (primaryKeyCode != 0) add(primaryKeyCode)
+                DEFAULT_KEYS[buttonId]?.let(::add)
+                KEYBOARD_KEYS[buttonId]?.let(::add)
+                D_INPUT_KEYS[buttonId]?.let(::add)
+            }
     }
 }

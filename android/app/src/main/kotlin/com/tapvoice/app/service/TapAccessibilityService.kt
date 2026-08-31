@@ -14,9 +14,9 @@ class TapAccessibilityService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return false
-        val handled = TapAudioEngine.playByKeyCode(event.keyCode)
-        if (handled) TapEventBus.keyPressed(event.keyCode)
-        return handled
+        val buttonId = TapAudioEngine.playByKeyCodeWithButton(event.keyCode)
+        if (buttonId != null) TapEventBus.keyPressed(event.keyCode, buttonId)
+        return buttonId != null
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
