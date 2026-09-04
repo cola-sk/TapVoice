@@ -23,6 +23,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _recordingTimer;
   Timer? _playbackTimer;
   Timer? _nativePlaybackFeedbackTimer;
+  Timer? _messageTimer;
+  OverlayEntry? _messageOverlay;
 
   String? _selectedId;
   String? _triggeredId;
@@ -68,6 +70,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _recordingTimer?.cancel();
     _playbackTimer?.cancel();
     _nativePlaybackFeedbackTimer?.cancel();
+    _messageTimer?.cancel();
+    _messageOverlay?.remove();
     final streamId = _playbackStreamId;
     if (streamId != null) {
       unawaited(_bridge.stopPlayback(streamId));
@@ -275,21 +279,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         await _bridge.stopPlayback(streamId);
       } catch (_) {}
     }
+    try {
+      await _bridge.stopAllPlayback();
+    } catch (_) {}
     if (mounted) _clearPlaybackState();
   }
 
   void _clearPlaybackState() {
     _playbackTimer?.cancel();
     _playbackTimer = null;
+    _nativePlaybackFeedbackTimer?.cancel();
+    _nativePlaybackFeedbackTimer = null;
     _playbackStreamId = null;
     _playbackStartedAt = null;
     _playbackElapsed = Duration.zero;
-    if (_playingId != null || _playingProgress != 0 || _playingPaused) {
+    if (_playingId != null ||
+        _playingProgress != 0 ||
+        _playingPaused ||
+        _nativePlaybackFeedbackId != null ||
+        _nativePlaybackFeedbackProgress != 0) {
       setState(() {
         _playingId = null;
         _playingDurationMs = 0;
         _playingProgress = 0.0;
         _playingPaused = false;
+        _nativePlaybackFeedbackId = null;
+        _nativePlaybackFeedbackProgress = 0.0;
       });
     }
   }
@@ -298,6 +313,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final selectedId = _selectedId;
     if (selectedId == null) {
       _message('请先选择一个手柄按键。');
+      return;
+    }
+    if (selectedId == 'btn_star') {
+      _message('★ 是手柄内部功能键，无法映射录音。');
       return;
     }
     if (!await _bridge.microphoneGranted()) {
@@ -465,11 +484,71 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _message(String value) {
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(value)));
-    }
+    if (!mounted) return;
+    _messageTimer?.cancel();
+    _messageOverlay?.remove();
+    final overlay = Overlay.of(context);
+    final entry = OverlayEntry(
+      builder: (overlayContext) => Positioned(
+        top: MediaQuery.paddingOf(overlayContext).top + 12,
+        left: 24,
+        right: 24,
+        child: IgnorePointer(
+          child: Material(
+            color: Colors.transparent,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 11,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF323232),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x33000000),
+                        blurRadius: 10,
+                        offset: Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          value,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    _messageOverlay = entry;
+    overlay.insert(entry);
+    _messageTimer = Timer(const Duration(seconds: 3), () {
+      _messageOverlay?.remove();
+      _messageOverlay = null;
+    });
   }
 
   @override
@@ -499,10 +578,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               .clamp(0.0, 1.0),
                           onSelect: (button) {
                             if (!_recording) {
-                              setState(() => _selectedId = button.id);
-                              if (_playingId != null) {
+                              if (button.id == 'btn_star') {
                                 unawaited(_stopPlayback());
+                                _message('★ 是手柄内部功能键，无法映射录音。');
+                                return;
                               }
+                              unawaited(_stopPlayback());
+                              setState(() => _selectedId = button.id);
                             }
                           },
                           onButtonPressed: (_) {},

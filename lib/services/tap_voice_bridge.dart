@@ -37,6 +37,8 @@ class TapVoiceBridge {
       _methods.invokeMethod<void>('resumePlayback', {'streamId': streamId});
   Future<void> stopPlayback(int streamId) =>
       _methods.invokeMethod<void>('stopPlayback', {'streamId': streamId});
+  Future<void> stopAllPlayback() =>
+      _methods.invokeMethod<void>('stopAllPlayback');
   Future<void> startRecording(String buttonId) =>
       _methods.invokeMethod<void>('startRecording', {'buttonId': buttonId});
   Future<Map<Object?, Object?>?> stopRecording() =>

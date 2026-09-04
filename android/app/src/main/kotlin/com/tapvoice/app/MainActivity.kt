@@ -152,6 +152,10 @@ class MainActivity : FlutterActivity() {
                     TapAudioEngine.stop(call.requiredInt("streamId"))
                     result.success(null)
                 }
+                "stopAllPlayback" -> {
+                    TapAudioEngine.stopAll()
+                    result.success(null)
+                }
                 "startRecording" -> {
                     if (!hasRecordPermission()) {
                         result.error("microphone_permission", "Microphone permission is required", null)
