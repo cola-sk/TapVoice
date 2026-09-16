@@ -395,8 +395,8 @@ class _AudioActionDialogState extends State<AudioActionDialog> {
     final item = _currentItem;
     final hasAudio = item != null && item.path.isNotEmpty;
     final title = item != null && item.name.isNotEmpty
-        ? 'Button ${widget.button.label} - ${item.name}'
-        : 'Button ${widget.button.label} - New Audio';
+        ? item.name
+        : (item != null ? 'Edit Audio' : 'New Audio');
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

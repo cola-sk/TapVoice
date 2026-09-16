@@ -192,11 +192,11 @@ class _AudioListPageState extends State<AudioListPage> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Flexible(
+                        const Flexible(
                           child: Text(
-                            'Button ${widget.button.label} - Audios',
+                            'Audios',
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
                               color: Colors.black,
@@ -309,9 +309,9 @@ class _AudioListPageState extends State<AudioListPage> {
                       ),
                     )
                   : ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                       itemCount: audios.length,
-                      separatorBuilder: (context, index) => const SizedBox(height: 10),
+                      separatorBuilder: (context, index) => const SizedBox(height: 6),
                       itemBuilder: (context, index) {
                         final audio = audios[index];
                         final isPreviewing = _previewingAudioId == audio.id;
@@ -321,17 +321,17 @@ class _AudioListPageState extends State<AudioListPage> {
 
                         return Material(
                           color: const Color(0xFFFAFAFA),
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                           child: InkWell(
                             onTap: () => _openAudioDialog(audio),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(8),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 12,
+                                horizontal: 14,
+                                vertical: 7,
                               ),
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: isPreviewing
                                       ? const Color(0xFFE53935)
@@ -342,8 +342,8 @@ class _AudioListPageState extends State<AudioListPage> {
                               child: Row(
                                 children: [
                                   Container(
-                                    width: 32,
-                                    height: 32,
+                                    width: 26,
+                                    height: 26,
                                     decoration: BoxDecoration(
                                       color: Colors.black.withAlpha(15),
                                       shape: BoxShape.circle,
@@ -352,32 +352,33 @@ class _AudioListPageState extends State<AudioListPage> {
                                     child: Text(
                                       '${index + 1}',
                                       style: const TextStyle(
-                                        fontSize: 14,
+                                        fontSize: 12,
                                         fontWeight: FontWeight.w700,
                                         color: Colors.black87,
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 14),
+                                  const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Text(
                                           displayName,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            fontSize: 16,
+                                            fontSize: 15,
                                             fontWeight: FontWeight.w700,
                                             color: Colors.black,
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
+                                        const SizedBox(height: 2),
                                         Text(
                                           'Duration: ${_formatDuration(audio.durationMs)}',
                                           style: const TextStyle(
-                                            fontSize: 13,
+                                            fontSize: 12,
                                             color: Color(0xFF777777),
                                           ),
                                         ),
@@ -385,23 +386,26 @@ class _AudioListPageState extends State<AudioListPage> {
                                     ),
                                   ),
                                   // Quick preview button
-                                  IconButton(
-                                    icon: Icon(
-                                      isPreviewing
-                                          ? Icons.stop_circle_rounded
-                                          : Icons.play_circle_fill_rounded,
-                                      color: isPreviewing
-                                          ? const Color(0xFFE53935)
-                                          : Colors.black,
-                                      size: 36,
+                                  InkWell(
+                                    onTap: () => _togglePreview(audio),
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(4),
+                                      child: Icon(
+                                        isPreviewing
+                                            ? Icons.stop_circle_rounded
+                                            : Icons.play_circle_fill_rounded,
+                                        color: isPreviewing
+                                            ? const Color(0xFFE53935)
+                                            : Colors.black,
+                                        size: 28,
+                                      ),
                                     ),
-                                    tooltip: isPreviewing ? 'Stop Preview' : 'Play Preview',
-                                    onPressed: () => _togglePreview(audio),
                                   ),
                                   const SizedBox(width: 6),
                                   const Icon(
                                     Icons.arrow_forward_ios_rounded,
-                                    size: 16,
+                                    size: 14,
                                     color: Color(0xFFAAAAAA),
                                   ),
                                 ],

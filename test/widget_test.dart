@@ -197,7 +197,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Button A - Audios'), findsOneWidget);
+    expect(find.text('Audios'), findsOneWidget);
     expect(find.text('0 / 10'), findsOneWidget);
     expect(find.text('No audios added yet'), findsOneWidget);
     expect(find.text('Add Audio'), findsNWidgets(2)); // in header and empty state
@@ -230,7 +230,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Button A - Audios'), findsOneWidget);
+    expect(find.text('Audios'), findsOneWidget);
     expect(find.text('2 / 10'), findsOneWidget);
     expect(find.text('Victory Cheer'), findsOneWidget);
     expect(find.text('Defeat Sigh'), findsOneWidget);
@@ -257,7 +257,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Button B - New Audio'), findsOneWidget);
+    expect(find.text('New Audio'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
     expect(find.text('Upload'), findsOneWidget);
     expect(find.text('Play'), findsNothing);
@@ -290,7 +290,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Button B - Jump Sound'), findsOneWidget);
+    expect(find.text('Jump Sound'), findsOneWidget);
     expect(find.text('Play'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
     expect(find.text('Upload'), findsOneWidget);
