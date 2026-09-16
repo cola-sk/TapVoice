@@ -17,8 +17,8 @@ class TapForegroundService : Service() {
         val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("TapVoice 正在待命")
-            .setContentText("已绑定的手柄按键会立即播放声音")
+            .setContentTitle("TapVoice is active")
+            .setContentText("Mapped controller buttons will play audio immediately")
             .setContentIntent(openApp)
             .setOngoing(true)
             .build()
@@ -30,7 +30,7 @@ class TapForegroundService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "TapVoice 后台监听", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, "TapVoice Background Service", NotificationManager.IMPORTANCE_LOW)
             (getSystemService(NotificationManager::class.java)).createNotificationChannel(channel)
         }
     }

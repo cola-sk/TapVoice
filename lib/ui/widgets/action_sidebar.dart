@@ -5,50 +5,60 @@ import 'package:flutter/material.dart';
 class ActionSidebar extends StatelessWidget {
   const ActionSidebar({
     super.key,
-    required this.recording,
+    this.recording = false,
     required this.playing,
     required this.paused,
     required this.hasAudio,
-    required this.onRecord,
+    this.onRecord,
     required this.onPauseOrResume,
     required this.onStop,
     required this.onPlay,
-    required this.onDelete,
-    required this.onUpload,
+    this.onDelete,
+    this.onUpload,
+    this.onEdit,
   });
 
   final bool recording;
   final bool playing;
   final bool paused;
   final bool hasAudio;
-  final VoidCallback onRecord;
+  final VoidCallback? onRecord;
   final VoidCallback onPauseOrResume;
   final VoidCallback onStop;
   final VoidCallback onPlay;
-  final VoidCallback onDelete;
-  final VoidCallback onUpload;
+  final VoidCallback? onDelete;
+  final VoidCallback? onUpload;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
-    final actions = recording || playing
-        ? <_TextAction>[
-            _TextAction(
-              label: paused ? 'Resume' : 'Pause',
-              onTap: onPauseOrResume,
-            ),
-            _TextAction(label: 'Stop', onTap: onStop),
-          ]
-        : hasAudio
-        ? <_TextAction>[
-            _TextAction(label: 'Play', onTap: onPlay),
-            _TextAction(label: 'Record', onTap: onRecord),
-            _TextAction(label: 'Upload', onTap: onUpload),
-            _TextAction(label: 'Del', onTap: onDelete),
-          ]
-        : <_TextAction>[
-            _TextAction(label: 'Record', onTap: onRecord),
-            _TextAction(label: 'Upload', onTap: onUpload),
-          ];
+    final List<_TextAction> actions;
+    if (recording || playing) {
+      actions = [
+        _TextAction(
+          label: paused ? 'Resume' : 'Pause',
+          onTap: onPauseOrResume,
+        ),
+        _TextAction(label: 'Stop', onTap: onStop),
+      ];
+    } else if (onEdit != null) {
+      actions = [
+        if (hasAudio) _TextAction(label: 'Play', onTap: onPlay),
+        _TextAction(label: 'Edit', onTap: onEdit!),
+      ];
+    } else if (hasAudio) {
+      actions = [
+        _TextAction(label: 'Play', onTap: onPlay),
+        if (onRecord != null) _TextAction(label: 'Record', onTap: onRecord!),
+        if (onUpload != null) _TextAction(label: 'Upload', onTap: onUpload!),
+        if (onDelete != null) _TextAction(label: 'Del', onTap: onDelete!),
+      ];
+    } else {
+      actions = [
+        if (onRecord != null) _TextAction(label: 'Record', onTap: onRecord!),
+        if (onUpload != null) _TextAction(label: 'Upload', onTap: onUpload!),
+      ];
+    }
 
     return SizedBox(
       width: 150,

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../models/audio_mapping.dart';
 import '../models/gamepad_button.dart';
 import '../services/tap_voice_bridge.dart';
+import 'pages/audio_list_page.dart';
 import 'widgets/action_sidebar.dart';
 import 'widgets/gamepad_view.dart';
 
@@ -20,7 +21,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _bridge = TapVoiceBridge.instance;
   final _mappings = <String, AudioMapping>{};
   StreamSubscription<Map<Object?, Object?>>? _events;
-  Timer? _recordingTimer;
   Timer? _playbackTimer;
   Timer? _nativePlaybackFeedbackTimer;
   Timer? _messageTimer;
@@ -37,11 +37,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _playingProgress = 0.0;
   double _nativePlaybackFeedbackProgress = 0.0;
   bool _playingPaused = false;
-  bool _recording = false;
-  bool _paused = false;
   bool _accessibilityEnabled = false;
-  Duration _elapsed = Duration.zero;
-  DateTime? _recordingStartedAt;
 
   GamepadButton? get _selected {
     final selectedId = _selectedId;
@@ -67,7 +63,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _events?.cancel();
-    _recordingTimer?.cancel();
     _playbackTimer?.cancel();
     _nativePlaybackFeedbackTimer?.cancel();
     _messageTimer?.cancel();
@@ -102,7 +97,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
       });
     } on PlatformException catch (error) {
-      _message('无法读取映射：${error.message ?? error.code}');
+      _message('Failed to load mappings: ${error.message ?? error.code}');
     }
   }
 
@@ -115,6 +110,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (event['type'] != 'keyPressed') return;
     final keyCode = (event['keyCode'] as num).toInt();
     final buttonId = event['buttonId'] as String?;
+    final durationMs = (event['durationMs'] as num?)?.toInt();
     final matches = buttonId == null
         ? gamepadButtons.where((item) {
             final mappedKeyCode = _mappings[item.id]?.keyCode ?? item.keyCode;
@@ -129,7 +125,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _selectedId = button.id;
       _triggeredId = button.id;
     });
-    _startNativePlaybackFeedback(button.id);
+    _startNativePlaybackFeedback(button.id, durationMs);
     HapticFeedback.lightImpact();
     Future<void>.delayed(const Duration(milliseconds: 200), () {
       if (mounted && _triggeredId == button.id) {
@@ -141,12 +137,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Accessibility playback starts in the Android service, so Flutter does
   /// not receive a MediaPlayer stream ID. Keep a UI-only countdown in sync
   /// with the saved recording duration without starting the audio twice.
-  void _startNativePlaybackFeedback(String buttonId) {
+  void _startNativePlaybackFeedback(String buttonId, [int? eventDurationMs]) {
     _nativePlaybackFeedbackTimer?.cancel();
     final mapping = _mappings[buttonId];
-    final durationMs = mapping != null && mapping.durationMs > 0
-        ? mapping.durationMs
-        : 1200;
+    final durationMs = eventDurationMs != null && eventDurationMs > 0
+        ? eventDurationMs
+        : (mapping != null && mapping.durationMs > 0 ? mapping.durationMs : 1200);
     final startedAt = DateTime.now();
     if (mounted) {
       setState(() {
@@ -184,11 +180,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mapping?.hasAudio != true) return;
 
     await _stopPlayback();
-    final durationMs = mapping!.durationMs > 0 ? mapping.durationMs : 1200;
+    final fallbackDuration = mapping!.durationMs > 0 ? mapping.durationMs : 1200;
 
     setState(() {
       _playingId = targetId;
-      _playingDurationMs = durationMs;
+      _playingDurationMs = fallbackDuration;
       _playbackElapsed = Duration.zero;
       _playbackStartedAt = null;
       _playingPaused = false;
@@ -196,18 +192,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
 
     try {
-      final streamId = await _bridge.playButton(targetId);
-      if (!mounted || _playingId != targetId || streamId == 0) {
-        if (streamId != 0) unawaited(_bridge.stopPlayback(streamId));
+      final result = await _bridge.playButton(targetId);
+      if (!mounted || _playingId != targetId || !result.isSuccess) {
+        if (result.isSuccess) unawaited(_bridge.stopPlayback(result.streamId));
         if (mounted && _playingId == targetId) _clearPlaybackState();
         return;
       }
-      _playbackStreamId = streamId;
+      final actualDuration = result.durationMs > 0 ? result.durationMs : fallbackDuration;
+      _playbackStreamId = result.streamId;
+      _playingDurationMs = actualDuration;
       _playbackStartedAt = DateTime.now();
       _startPlaybackTimer(targetId);
     } on PlatformException catch (error) {
       if (mounted && _playingId == targetId) _clearPlaybackState();
-      _message('播放录音失败：${error.message ?? error.code}');
+      _message('Playback failed: ${error.message ?? error.code}');
     }
   }
 
@@ -265,7 +263,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _playbackTimer?.cancel();
       }
     } on PlatformException catch (error) {
-      _message('播放状态切换失败：${error.message ?? error.code}');
+      _message('Playback state change failed: ${error.message ?? error.code}');
     }
   }
 
@@ -309,166 +307,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _startRecording() async {
-    final selectedId = _selectedId;
-    if (selectedId == null) {
-      _message('请先选择一个手柄按键。');
-      return;
-    }
-    if (selectedId == 'btn_star') {
-      _message('★ 是手柄内部功能键，无法映射录音。');
-      return;
-    }
-    if (!await _bridge.microphoneGranted()) {
-      await _bridge.requestMicrophonePermission();
-      _message('请允许麦克风权限后再次点击 Record。');
-      return;
-    }
-    try {
-      await _bridge.startRecording(selectedId);
-      if (!mounted) return;
-      setState(() {
-        _recording = true;
-        _paused = false;
-        _elapsed = Duration.zero;
-        _recordingStartedAt = DateTime.now();
-      });
-      _startMeter();
-    } on PlatformException catch (error) {
-      _message('录音无法开始：${error.message ?? error.code}');
-    }
-  }
-
-  void _startMeter() {
-    _recordingTimer?.cancel();
-    _recordingTimer = Timer.periodic(const Duration(milliseconds: 100), (
-      _,
-    ) async {
-      if (!_recording || _paused || _recordingStartedAt == null) return;
-      final elapsed = DateTime.now().difference(_recordingStartedAt!);
-      if (elapsed >= const Duration(minutes: 1)) {
-        await _finishRecording();
-        return;
-      }
-      if (mounted && _recording && !_paused) {
-        setState(() => _elapsed = elapsed);
-      }
-    });
-  }
-
-  Future<void> _pauseRecording() async {
-    if (_paused) return;
-    try {
-      await _bridge.pauseRecording();
-      _recordingTimer?.cancel();
-      if (mounted) setState(() => _paused = true);
-    } on PlatformException catch (error) {
-      _message('暂停录音失败：${error.message ?? error.code}');
-    }
-  }
-
-  Future<void> _pauseOrResumeActivity() async {
-    if (_recording) {
-      if (_paused) {
-        try {
-          await _bridge.resumeRecording();
-          if (!mounted) return;
-          setState(() {
-            _paused = false;
-            _recordingStartedAt = DateTime.now().subtract(_elapsed);
-          });
-          _startMeter();
-        } on PlatformException catch (error) {
-          _message('录音状态切换失败：${error.message ?? error.code}');
-        }
-      } else {
-        await _pauseRecording();
-      }
-      return;
-    }
-    await _pauseOrResumePlayback();
-  }
-
-  Future<void> _finishRecording() async {
-    _recordingTimer?.cancel();
-    _recordingTimer = null;
-    try {
-      final result = await _bridge.stopRecording();
-      if (!mounted) return;
-      setState(() {
-        _recording = false;
-        _paused = false;
-        _recordingStartedAt = null;
-      });
-      if (result == null) {
-        _message('录音太短或保存失败，请重试。');
-        return;
-      }
-      await _loadMappings();
-    } on PlatformException catch (error) {
-      if (mounted) {
-        setState(() {
-          _recording = false;
-          _paused = false;
-        });
-      }
-      _message('保存录音失败：${error.message ?? error.code}');
-    }
-  }
-
-  Future<void> _deleteSelected() async {
-    final selectedId = _selectedId;
-    final selected = _selected;
-    if (selectedId == null ||
-        selected == null ||
-        _selectedMapping?.hasAudio != true) {
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除录音？'),
-        content: Text('将移除 ${selected.label} 的本地音频，无法恢复。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除'),
-          ),
-        ],
+  Future<void> _openAudioList(GamepadButton button) async {
+    unawaited(_stopPlayback());
+    final mapping = _mappings[button.id];
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AudioListPage(
+          button: button,
+          mapping: mapping,
+          onMappingChanged: (updated) {
+            if (mounted) {
+              setState(() {
+                if (updated != null) {
+                  _mappings[button.id] = updated;
+                } else {
+                  _mappings.remove(button.id);
+                }
+              });
+            }
+          },
+        ),
       ),
     );
-    if (confirmed != true) return;
-    await _stopPlayback();
-    await _bridge.deleteMapping(selectedId);
-    if (mounted) {
-      setState(() {
-        _selectedId = null;
-        _mappings.remove(selectedId);
-      });
-    }
     await _loadMappings();
-  }
-
-  Future<void> _uploadSelected() async {
-    final selectedId = _selectedId;
-    if (selectedId == null) {
-      _message('请先选择一个手柄按键。');
-      return;
-    }
-    try {
-      final mapping = await _bridge.uploadAudio(selectedId);
-      if (mapping == null || !mounted) return;
-      await _loadMappings();
-      _message('音频上传成功。');
-    } on PlatformException catch (error) {
-      if (error.code != 'cancelled') {
-        _message('音频上传失败：${error.message ?? error.code}');
-      }
-    }
   }
 
   Future<void> _openBackgroundSettings() async {
@@ -479,7 +341,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
       await _bridge.openAccessibilitySettings();
     } on PlatformException catch (error) {
-      _message('无法打开后台监听设置：${error.message ?? error.code}');
+      _message('Failed to open settings: ${error.message ?? error.code}');
     }
   }
 
@@ -552,75 +414,75 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final actionWidth = (constraints.maxWidth * .16).clamp(140.0, 210.0);
-          return Stack(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 26, right: 12),
-                        child: GamepadView(
-                          selectedId: _selectedId,
-                          boundIds: _boundIds,
-                          triggeredId: _triggeredId,
-                          playingId: _nativePlaybackFeedbackId ?? _playingId,
-                          playingProgress: _nativePlaybackFeedbackId != null
-                              ? _nativePlaybackFeedbackProgress
-                              : _playingProgress,
-                          recording: _recording && !_paused,
-                          recordingProgress: (_elapsed.inMilliseconds / 60000)
-                              .clamp(0.0, 1.0),
-                          onSelect: (button) {
-                            if (!_recording) {
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final actionWidth = (constraints.maxWidth * 0.18).clamp(110.0, 160.0);
+            return Stack(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 26, right: 12),
+                          child: GamepadView(
+                            selectedId: _selectedId,
+                            boundIds: _boundIds,
+                            triggeredId: _triggeredId,
+                            playingId: _nativePlaybackFeedbackId ?? _playingId,
+                            playingProgress: _nativePlaybackFeedbackId != null
+                                ? _nativePlaybackFeedbackProgress
+                                : _playingProgress,
+                            recording: false,
+                            recordingProgress: 0.0,
+                            onSelect: (button) {
                               if (button.id == 'btn_star') {
                                 unawaited(_stopPlayback());
-                                _message('★ 是手柄内部功能键，无法映射录音。');
+                                _message('★ is an internal function key and cannot be mapped.');
                                 return;
                               }
                               unawaited(_stopPlayback());
-                              setState(() => _selectedId = button.id);
-                            }
-                          },
-                          onButtonPressed: (_) {},
+                              if (_selectedId == button.id) {
+                                _openAudioList(button);
+                              } else {
+                                setState(() => _selectedId = button.id);
+                              }
+                            },
+                            onButtonPressed: (_) {},
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  SizedBox(
-                    width: actionWidth,
-                    child: Center(
-                      child: ActionSidebar(
-                        recording: _recording,
-                        playing: _playingId != null,
-                        paused: _recording ? _paused : _playingPaused,
-                        hasAudio: _selectedMapping?.hasAudio == true,
-                        onRecord: _startRecording,
-                        onPauseOrResume: _pauseOrResumeActivity,
-                        onStop: _recording ? _finishRecording : _stopPlayback,
-                        onPlay: () => _playCurrentButton(_selectedId),
-                        onDelete: _deleteSelected,
-                        onUpload: _uploadSelected,
+                    SizedBox(
+                      width: actionWidth,
+                      child: Center(
+                        child: ActionSidebar(
+                          playing: _playingId != null,
+                          paused: _playingPaused,
+                          hasAudio: _selectedMapping?.hasAudio == true,
+                          onPauseOrResume: _pauseOrResumePlayback,
+                          onStop: _stopPlayback,
+                          onPlay: () => _playCurrentButton(_selectedId),
+                          onEdit: _selected != null ? () => _openAudioList(_selected!) : null,
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              Positioned(
-                top: 18,
-                right: 22,
+                  ],
+                ),
+                Positioned(
+                  top: 18,
+                  right: 22,
                 child: Tooltip(
                   message: _accessibilityEnabled
-                      ? '后台监听已开启，点击打开无障碍设置'
-                      : '开启后台监听',
+                      ? 'Background service active. Tap to open Accessibility settings.'
+                      : 'Enable background service',
                   child: Semantics(
                     button: true,
-                    label: _accessibilityEnabled ? '已开启' : '去开启',
+                    label: _accessibilityEnabled ? 'Active' : 'Enable',
                     child: GestureDetector(
                       onTap: _openBackgroundSettings,
                       child: AnimatedContainer(
@@ -656,7 +518,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              _accessibilityEnabled ? '已开启' : '去开启',
+                              _accessibilityEnabled ? 'Active' : 'Enable',
                               style: TextStyle(
                                 color: _accessibilityEnabled
                                     ? const Color(0xFF25863D)
@@ -678,4 +540,5 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
     ),
   );
+}
 }

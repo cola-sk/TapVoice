@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">TapVoice</string>
-    <string name="accessibility_service_label">TapVoice 按键监听</string>
-    <string name="accessibility_service_description">在已绑定的蓝牙手柄按键按下时播放对应音频。TapVoice 只处理已配置的外接键盘按键。</string>
+    <string name="accessibility_service_label">TapVoice Key Listener</string>
+    <string name="accessibility_service_description">Plays mapped audio when bound Bluetooth controller buttons are pressed. TapVoice only handles configured external controller keys.</string>
 </resources>

@@ -34,6 +34,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var recorder: TapRecorder
     private var pendingUploadResult: MethodChannel.Result? = null
     private var pendingUploadButtonId: String? = null
+    private var pendingUploadAudioId: String? = null
     private val interceptedKeyCodes = mutableSetOf<Int>()
     private var activeDpadButtonId: String? = null
     private var handledDpadMotion = false
@@ -47,10 +48,15 @@ class MainActivity : FlutterActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            val buttonId = TapAudioEngine.playByKeyCodeWithButton(keyCode)
-            if (buttonId != null) {
+            val playResult = TapAudioEngine.playByKeyCodeWithButton(keyCode)
+            if (playResult != null) {
                 interceptedKeyCodes += keyCode
-                TapEventBus.keyPressed(keyCode, buttonId)
+                TapEventBus.keyPressed(
+                    keyCode,
+                    playResult.buttonId,
+                    playResult.durationMs,
+                    playResult.audioId
+                )
                 return true
             }
         } else if (event.action == KeyEvent.ACTION_UP && keyCode in interceptedKeyCodes) {
@@ -96,9 +102,15 @@ class MainActivity : FlutterActivity() {
 
         activeDpadButtonId = buttonId
         handledDpadMotion = false
-        if (TapAudioEngine.playByButton(buttonId)) {
+        val playResult = TapAudioEngine.playButton(buttonId)
+        if (playResult != null) {
             handledDpadMotion = true
-            TapEventBus.keyPressed(MappingStore.DEFAULT_KEYS[buttonId] ?: 0, buttonId)
+            TapEventBus.keyPressed(
+                MappingStore.DEFAULT_KEYS[buttonId] ?: 0,
+                buttonId,
+                playResult.durationMs,
+                playResult.audioId
+            )
             return true
         }
 
@@ -130,15 +142,22 @@ class MainActivity : FlutterActivity() {
                 }
                 "deleteMapping" -> {
                     val buttonId = call.requiredString("buttonId")
-                    MappingStore(applicationContext).delete(buttonId)?.audioPath?.let { path ->
-                        java.io.File(path).delete()
-                    }
+                    MappingStore(applicationContext).delete(buttonId)
                     TapAudioEngine.unload(buttonId)
                     result.success(null)
                 }
+                "deleteAudio" -> {
+                    val buttonId = call.requiredString("buttonId")
+                    val audioId = call.requiredString("audioId")
+                    val updated = MappingStore(applicationContext).deleteAudio(buttonId, audioId)
+                    TapAudioEngine.reload()
+                    result.success(updated?.toMap())
+                }
                 "playButton" -> {
                     val buttonId = call.requiredString("buttonId")
-                    result.success(TapAudioEngine.playByButtonStream(buttonId))
+                    val audioId = call.argument<String>("audioId")
+                    val playResult = TapAudioEngine.playButton(buttonId, audioId)
+                    result.success(playResult?.toMap() ?: mapOf("streamId" to 0, "durationMs" to 0))
                 }
                 "pausePlayback" -> {
                     TapAudioEngine.pause(call.requiredInt("streamId"))
@@ -160,17 +179,32 @@ class MainActivity : FlutterActivity() {
                     if (!hasRecordPermission()) {
                         result.error("microphone_permission", "Microphone permission is required", null)
                     } else {
-                        recorder.start(call.requiredString("buttonId"))
+                        val buttonId = call.requiredString("buttonId")
+                        val audioId = call.argument<String>("audioId")
+                        recorder.start(buttonId, audioId)
                         result.success(null)
                     }
                 }
                 "stopRecording" -> {
+                    val name = call.argument<String>("name")
                     val saved = recorder.stop()
                     if (saved == null) result.error("recording_failed", "No recording was saved", null)
                     else {
-                        val mapping = MappingStore(applicationContext).saveAudio(saved.buttonId, saved.path, saved.durationMs)
-                        TapAudioEngine.load(mapping.buttonId, mapping.keyCode, mapping.audioPath ?: saved.path)
-                        result.success(mapOf("path" to saved.path, "durationMs" to saved.durationMs))
+                        val (mapping, audioItem) = MappingStore(applicationContext).addOrUpdateAudio(
+                            buttonId = saved.buttonId,
+                            audioId = saved.audioId,
+                            path = saved.path,
+                            durationMs = saved.durationMs,
+                            name = name
+                        )
+                        TapAudioEngine.reload()
+                        result.success(mapOf(
+                            "path" to saved.path,
+                            "durationMs" to saved.durationMs,
+                            "audioId" to audioItem.id,
+                            "name" to audioItem.name,
+                            "mapping" to mapping.toMap()
+                        ))
                     }
                 }
                 "cancelRecording" -> { recorder.cancel(); result.success(null) }
@@ -182,6 +216,7 @@ class MainActivity : FlutterActivity() {
                     } else {
                         pendingUploadResult = result
                         pendingUploadButtonId = call.requiredString("buttonId")
+                        pendingUploadAudioId = call.argument<String>("audioId")
                         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             type = "audio/*"
@@ -234,8 +269,10 @@ class MainActivity : FlutterActivity() {
     private fun handlePickedAudio(uri: Uri?) {
         val result = pendingUploadResult ?: return
         val buttonId = pendingUploadButtonId
+        val audioId = pendingUploadAudioId
         pendingUploadResult = null
         pendingUploadButtonId = null
+        pendingUploadAudioId = null
 
         if (uri == null || buttonId == null) {
             result.error("cancelled", "Audio selection was cancelled", null)
@@ -244,7 +281,8 @@ class MainActivity : FlutterActivity() {
 
         try {
             val directory = File(filesDir, "audios").apply { mkdirs() }
-            val destination = File(directory, "$buttonId.${audioExtension(uri)}")
+            val fileKey = audioId ?: "${buttonId}_${System.currentTimeMillis()}"
+            val destination = File(directory, "$fileKey.${audioExtension(uri)}")
             val input = contentResolver.openInputStream(uri)
                 ?: throw IllegalStateException("Unable to read selected audio")
             input.use { source ->
@@ -252,13 +290,18 @@ class MainActivity : FlutterActivity() {
             }
 
             val store = MappingStore(applicationContext)
-            val previousPath = store.findByButton(buttonId)?.audioPath
             val durationMs = readDuration(destination)
-            val mapping = store.saveAudio(buttonId, destination.absolutePath, durationMs)
-            if (previousPath != null && previousPath != destination.absolutePath) {
-                File(previousPath).delete()
-            }
-            TapAudioEngine.load(mapping.buttonId, mapping.keyCode, destination.absolutePath)
+            val displayName = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?.substringBeforeLast('.')
+            val (mapping, audioItem) = store.addOrUpdateAudio(
+                buttonId = buttonId,
+                audioId = audioId,
+                path = destination.absolutePath,
+                durationMs = durationMs,
+                name = displayName
+            )
+            TapAudioEngine.reload()
             result.success(mapping.toMap())
         } catch (error: Exception) {
             result.error("upload_failed", error.message, null)

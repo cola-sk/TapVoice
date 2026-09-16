@@ -11,11 +11,18 @@ object TapEventBus : EventChannel.StreamHandler {
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) { sink = events }
     override fun onCancel(arguments: Any?) { sink = null }
 
-    fun keyPressed(keyCode: Int, buttonId: String? = null) = send(
+    fun keyPressed(
+        keyCode: Int,
+        buttonId: String? = null,
+        durationMs: Long = 0,
+        audioId: String? = null
+    ) = send(
         buildMap {
             put("type", "keyPressed")
             put("keyCode", keyCode)
             buttonId?.let { put("buttonId", it) }
+            if (durationMs > 0) put("durationMs", durationMs)
+            audioId?.let { put("audioId", it) }
         },
     )
     fun learnedKey(keyCode: Int) = send(mapOf("type" to "learnedKey", "keyCode" to keyCode))

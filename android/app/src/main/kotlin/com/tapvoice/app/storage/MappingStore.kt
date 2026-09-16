@@ -4,14 +4,42 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class AudioItem(
+    val id: String,
+    val path: String,
+    val durationMs: Long = 0,
+    val name: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+) {
+    fun toMap() = mapOf(
+        "id" to id,
+        "path" to path,
+        "durationMs" to durationMs,
+        "name" to name,
+        "createdAt" to createdAt
+    )
+}
+
 data class AudioMapping(
     val buttonId: String,
     val keyCode: Int,
-    val audioPath: String?,
-    val durationMs: Long = 0,
+    val audios: List<AudioItem> = emptyList(),
+    val legacyAudioPath: String? = null,
+    val legacyDurationMs: Long = 0,
     val updatedAt: Long = System.currentTimeMillis(),
 ) {
-    fun toMap() = mapOf("buttonId" to buttonId, "keyCode" to keyCode, "audioPath" to audioPath, "durationMs" to durationMs, "updatedAt" to updatedAt)
+    val audioPath: String? get() = audios.firstOrNull()?.path ?: legacyAudioPath
+    val durationMs: Long get() = audios.firstOrNull()?.durationMs ?: legacyDurationMs
+    val hasAudio: Boolean get() = audios.isNotEmpty() || (!audioPath.isNullOrBlank())
+
+    fun toMap() = mapOf(
+        "buttonId" to buttonId,
+        "keyCode" to keyCode,
+        "audios" to audios.map { it.toMap() },
+        "audioPath" to audioPath,
+        "durationMs" to durationMs,
+        "updatedAt" to updatedAt
+    )
 }
 
 class MappingStore(context: Context) {
@@ -20,35 +48,88 @@ class MappingStore(context: Context) {
 
     fun all(): List<Map<String, Any?>> = read().map { it.toMap() }
 
-    /**
-     * A Micro in keyboard (K) mode emits keyboard key codes, while the same
-     * physical button in controller mode emits BUTTON_* codes.  Keep both
-     * forms associated with the recording slot so stored recordings work in
-     * either mode.
-     */
     fun findByKey(keyCode: Int) = read().firstOrNull {
-        it.audioPath != null && keyCode in keyCodesFor(it.buttonId, it.keyCode)
+        it.hasAudio && keyCode in keyCodesFor(it.buttonId, it.keyCode)
     }
     fun findByButton(buttonId: String) = read().firstOrNull { it.buttonId == buttonId }
 
     fun save(buttonId: String, keyCode: Int, audioPath: String?): AudioMapping {
         val current = findByButton(buttonId)
-        val item = AudioMapping(buttonId, keyCode, audioPath ?: current?.audioPath, current?.durationMs ?: 0)
+        val item = AudioMapping(
+            buttonId = buttonId,
+            keyCode = keyCode,
+            audios = current?.audios ?: emptyList(),
+            legacyAudioPath = audioPath ?: current?.audioPath,
+            legacyDurationMs = current?.durationMs ?: 0
+        )
         replace(item)
         return item
     }
 
+    fun addOrUpdateAudio(
+        buttonId: String,
+        audioId: String?,
+        path: String,
+        durationMs: Long,
+        name: String? = null
+    ): Pair<AudioMapping, AudioItem> {
+        val current = findByButton(buttonId) ?: AudioMapping(buttonId, DEFAULT_KEYS[buttonId] ?: 0)
+        val existingAudios = current.audios.toMutableList()
+        val index = if (audioId != null) existingAudios.indexOfFirst { it.id == audioId } else -1
+
+        val audioItem: AudioItem
+        if (index >= 0) {
+            val old = existingAudios[index]
+            audioItem = old.copy(
+                path = path,
+                durationMs = durationMs,
+                name = name ?: old.name.ifBlank { "Audio ${index + 1}" }
+            )
+            existingAudios[index] = audioItem
+        } else {
+            if (existingAudios.size >= 10) {
+                throw IllegalStateException("Maximum 10 audios allowed per button")
+            }
+            val newId = audioId ?: "${buttonId}_${System.currentTimeMillis()}"
+            audioItem = AudioItem(
+                id = newId,
+                path = path,
+                durationMs = durationMs,
+                name = name ?: "Audio ${existingAudios.size + 1}"
+            )
+            existingAudios.add(audioItem)
+        }
+
+        val updated = current.copy(audios = existingAudios, updatedAt = System.currentTimeMillis())
+        replace(updated)
+        return Pair(updated, audioItem)
+    }
+
     fun saveAudio(buttonId: String, audioPath: String, durationMs: Long): AudioMapping {
-        val current = findByButton(buttonId) ?: AudioMapping(buttonId, DEFAULT_KEYS[buttonId] ?: 0, null)
-        val item = current.copy(audioPath = audioPath, durationMs = durationMs, updatedAt = System.currentTimeMillis())
-        replace(item)
-        return item
+        return addOrUpdateAudio(buttonId, null, audioPath, durationMs).first
+    }
+
+    fun deleteAudio(buttonId: String, audioId: String): AudioMapping? {
+        val current = findByButton(buttonId) ?: return null
+        val existingAudios = current.audios.toMutableList()
+        val itemToDelete = existingAudios.firstOrNull { it.id == audioId }
+        if (itemToDelete != null) {
+            existingAudios.remove(itemToDelete)
+            runCatching { java.io.File(itemToDelete.path).delete() }
+        }
+        val updated = current.copy(audios = existingAudios, updatedAt = System.currentTimeMillis())
+        replace(updated)
+        return updated
     }
 
     fun delete(buttonId: String): AudioMapping? {
         val items = read().toMutableList()
         val item = items.firstOrNull { it.buttonId == buttonId }
         if (item != null) {
+            item.audios.forEach { audio ->
+                runCatching { java.io.File(audio.path).delete() }
+            }
+            item.audioPath?.let { runCatching { java.io.File(it).delete() } }
             items.remove(item)
             write(items)
         }
@@ -66,10 +147,44 @@ class MappingStore(context: Context) {
         val array = JSONArray(raw)
         List(array.length()) { index ->
             val value = array.getJSONObject(index)
+            val buttonId = value.getString("buttonId")
+            val keyCode = value.getInt("keyCode")
+            val audiosArray = value.optJSONArray("audios")
+            val audios = if (audiosArray != null) {
+                List(audiosArray.length()) { i ->
+                    val a = audiosArray.getJSONObject(i)
+                    AudioItem(
+                        id = a.getString("id"),
+                        path = a.getString("path"),
+                        durationMs = a.optLong("durationMs"),
+                        name = a.optString("name").takeIf { it.isNotBlank() } ?: "Audio ${i + 1}",
+                        createdAt = a.optLong("createdAt", System.currentTimeMillis())
+                    )
+                }
+            } else {
+                val legacyPath = value.optString("audioPath").takeIf { it.isNotBlank() }
+                if (legacyPath != null && java.io.File(legacyPath).exists()) {
+                    listOf(
+                        AudioItem(
+                            id = "${buttonId}_legacy",
+                            path = legacyPath,
+                            durationMs = value.optLong("durationMs"),
+                            name = "Audio 1",
+                            createdAt = value.optLong("updatedAt", System.currentTimeMillis())
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+            }
+
             AudioMapping(
-                value.getString("buttonId"), value.getInt("keyCode"),
-                value.optString("audioPath").takeIf { it.isNotBlank() },
-                value.optLong("durationMs"), value.optLong("updatedAt"),
+                buttonId = buttonId,
+                keyCode = keyCode,
+                audios = audios,
+                legacyAudioPath = value.optString("audioPath").takeIf { it.isNotBlank() },
+                legacyDurationMs = value.optLong("durationMs"),
+                updatedAt = value.optLong("updatedAt")
             )
         }
     }.getOrDefault(emptyList())
@@ -78,8 +193,22 @@ class MappingStore(context: Context) {
         val array = JSONArray()
         items.forEach { item ->
             array.put(JSONObject().apply {
-                put("buttonId", item.buttonId); put("keyCode", item.keyCode)
-                put("audioPath", item.audioPath); put("durationMs", item.durationMs); put("updatedAt", item.updatedAt)
+                put("buttonId", item.buttonId)
+                put("keyCode", item.keyCode)
+                put("audioPath", item.audioPath)
+                put("durationMs", item.durationMs)
+                put("updatedAt", item.updatedAt)
+                put("audios", JSONArray().apply {
+                    item.audios.forEach { audio ->
+                        put(JSONObject().apply {
+                            put("id", audio.id)
+                            put("path", audio.path)
+                            put("durationMs", audio.durationMs)
+                            put("name", audio.name)
+                            put("createdAt", audio.createdAt)
+                        })
+                    }
+                })
             })
         }
         prefs.edit().putString(storageKey, array.toString()).apply()

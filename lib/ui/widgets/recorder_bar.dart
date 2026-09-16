@@ -41,7 +41,7 @@ class RecorderBar extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         Text(
-          isRecording ? _format(elapsed) : '准备就绪',
+          isRecording ? _format(elapsed) : 'Ready',
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         const SizedBox(width: 18),
@@ -50,7 +50,7 @@ class RecorderBar extends StatelessWidget {
         ),
         const SizedBox(width: 18),
         Text(
-          isRecording ? '正在录制 $buttonLabel' : '选择按键后开始录音',
+          isRecording ? 'Recording $buttonLabel' : 'Select a button to start recording',
           style: TextStyle(
             color: isRecording
                 ? const Color(0xFFFFB1C9)
